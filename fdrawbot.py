@@ -4,7 +4,29 @@ import socket
 DefaultServer = "flockdraw.com"
 DefaultPort = 443
 BuffSize = 4096
-DefaultEncoding = 'iso-8859-2'
+Width = 801
+Height = 481
+
+def img2png(img, w = Width, h = Height):
+    from PIL import Image
+    import zlib
+    import StringIO
+    import base64
+    data = base64.b64decode( img )
+    pixels = zlib.decompress( data )
+    pilim = Image.frombuffer( "RGBA", (w,h), pixels, "raw", "ARGB", 0, 1 ).convert("RGB")
+    f = StringIO.StringIO()
+    pilim.save( f, "png" )
+    return f.getvalue()
+
+def png2img(png):
+    from PIL import Image
+    import zlib
+    import StringIO
+    import base64
+    pilim = Image.open( StringIO.StringIO( png ) ).convert("RGBA")
+    data = zlib.compress( "".join( [ chr(a)+chr(r)+chr(g)+chr(b) for r,g,b,a in pilim.getdata() ] ) )
+    return base64.b64encode( data )
 
 class FlockDrawConnection:
     def __init__(self,
@@ -13,35 +35,35 @@ class FlockDrawConnection:
                  server = DefaultServer,
                  port = DefaultPort):
         self.users = []
-        self.bufferIn = b""
+        self.bufferIn = ""
         self.bufferOut = []
         assert "/" not in server
         self.sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM )
         serverport = server, port
-        print( "Connecting to ", serverport )
+        print "Connecting to ", serverport
         self.sock.connect( serverport )
-        print( "Connected to ", serverport )
+        print "Connected to ", serverport
         self.server = server
         self.port = port
         self.whiteboard = whiteboard
         self.initialize( server, whiteboard, username )
         self.hadUsers = False
         self.oweBitmap = []
+        self.didCreate = False
     def sendLine(self, data):
-        print( "Sending ", data )
-        self.bufferOut.append( data.encode( DefaultEncoding ) )   
-        self.bufferOut.append( b"\n" )
+        self.bufferOut.append( data )   
+        self.bufferOut.append( "\n" )
     def initialize(self, server, whiteboard, username):
-        self.sendLine( "C whiteboard-http://{server}/{whiteboard} {username} {version}".format(
-                server = server,
-                whiteboard = whiteboard,
-                username = username,
-                version = 3
+        self.sendLine( "C whiteboard-http://%s/%s %s %d" % (
+                server,
+                whiteboard,
+                username,
+                3
             ) )
     def deliver(self, user, data):
-        self.sendLine( "D {user} {data}".format( user=user, data=data) )
+        self.sendLine( "D %s %s" % ( user, data) )
     def broadcast(self, data):
-        self.sendLine( "B {data}".format( data=data) )
+        self.sendLine( "B %s" % data)
     def deliverCommands(self, user, commands):
         self.deliver( user, self.formatCommands( commands ) )
     def broadcastCommands(self, commands):
@@ -51,25 +73,25 @@ class FlockDrawConnection:
         printLine = repr( data )
         if len( printLine ) > limit:
             printLine = repr( line[:limit] + "..." )
-        print( "warning:", warning.format( data = data ), file=sys.stderr )
+        print >>sys.stderr, "warning:", warning % data
     def formatCommands(self, commands):
         return "\t".join( commands )
     def handleAdd(self, username):
         assert " " not in username
         self.users.append( username )
-        print( "New peer:", username )
+        print "New peer:", username
         self.hadUsers = True
     def handleRemove(self, username):
         if username in self.users:
             self.users.remove( username )
-            print( "Peer leaving:", username )
+            print "Peer leaving:", username
         else:
-            self.warnWith( "unknown peer {data} leaving", username )
+            self.warnWith( "unknown peer %s leaving", username )
     def handleMessage(self, data):
         try:
             sender, message = data.split(" ", 1)
         except ValueError:
-            self.warnWith( "received message {data} without sender", username )
+            self.warnWith( "received message %s without sender", username )
             return
         for command in self.parseCommands( message ):
             self.handleCommand( sender, command )
@@ -79,59 +101,56 @@ class FlockDrawConnection:
             user = random.choice([user for user in self.users if user not in noAsk])
         except IndexError:
             return False
-        self.warnWith( "attempting to obtain bitmap from {data}", user )
+        self.warnWith( "attempting to obtain bitmap from %s", user )
         self.deliver( user, "Rq" )
         return True
     def handleRequest(self, origin, args):
         # This is the one that needs to be handled to avoid messing up
         # state for non-bots. Since we can't keep bitmap state ourselves,
         # it's a hard one. We try to obtain the bitmap from another peer.
-        self.warnWith( "{data} requested bitmap", origin )
+        self.warnWith( "%s requested bitmap", origin )
         self.oweBitmap.append( origin )
         if not self.tryObtainBitmap( noAsk = [ origin ] ):
-            self.warnWith( "unable to obtain bitmap for {data}", origin )
+            self.warnWith( "unable to obtain bitmap for %s", origin )
+    def handleNew(self, args):
+        print "Created new whiteboard"
+        self.didCreate = True
     def handleKeypress(self, origin, args):
-        print( "Event:", origin, "keypress", args )
+        print "Event:", origin, "keypress", args
     def handlePointerMove(self, origin, args):
-        print( "Event:", origin, "move", args )
+        print "Event:", origin, "move", args
     def handlePointerSize(self, origin, args):
-        print( "Event:", origin, "size", args )
+        print "Event:", origin, "size", args
     def handlePointerDown(self, origin, args):
-        print( "Event:", origin, "down", args )
+        print "Event:", origin, "down", args
     def handlePointerUp(self, origin, args):
-        print( "Event:", origin, "up", args )
+        print "Event:", origin, "up", args
     def handlePointerHide(self, origin, args):
-        print( "Event:", origin, "hide", args )
+        print "Event:", origin, "hide", args
     def handlePointerShow(self, origin, args):
-        print( "Event:", origin, "show", args )
+        print "Event:", origin, "show", args
     def handleBrushChange(self, origin, args):
-        print( "Event:", origin, "tool", args )
+        print "Event:", origin, "tool", args
     def handleColourChange(self, origin, args):
-        print( "Event:", origin, "colour", args )
+        print "Event:", origin, "colour", args
     def handleFlush(self, origin, args):
-        print( "Event:", origin, "flush", args )
-    def debugSaveBitmap(self, filename, b64coded):
-        import base64
-        try:
-            data = base64.b64decode( b64coded.encode( DefaultEncoding ) )
-        except:
-            print( "warning: data invalid", file=sys.stderr )
-            return
+        print "Event:", origin, "flush", args
+    def debugSavePng(self, filename, b64coded):
         f = open( filename, "wb" )
-        f.write( data )
+        f.write( img2png( b64coded ) )
         f.close()
     def handleBitmap(self, origin, data):
         for user in self.oweBitmap:
-            self.warnWith( "relaying bitmap to {data}", user )
+            self.warnWith( "relaying bitmap to %s", user )
             self.deliver( user, "Bo " + data )
         self.oweBitmap = []
         import datetime
-        debugName = "flockdrawdump-{user}-{whiteboard}-{timestamp}.bitmap".format(
-            user = origin,
-            whiteboard = self.whiteboard,
-            timestamp = str( datetime.datetime.now() )
+        debugName = "flockdrawdump-%s-%s-%s.png" % (
+            origin,
+            self.whiteboard,
+            str( datetime.datetime.now() )
         )
-        self.debugSaveBitmap( debugName, data )
+        self.debugSavePng( debugName, data )
     def handleCommand(self, origin, command ):
         if " " in command:
             command, args = command.split(" ", 1)
@@ -153,27 +172,31 @@ class FlockDrawConnection:
                 'Bo': self.handleBitmap,
             }[ command ]
         except KeyError:
-            self.warnWith( "ignoring command {data}", command )
+            self.warnWith( "ignoring command %s", command )
             if args:
-                self.warnWith( "...with arguments {data}", args )
-            self.warnWith( "...from {data}", origin )
+                self.warnWith( "...with arguments %s", args )
+            self.warnWith( "...from %s", origin )
         f( origin, args )
     def parseCommands(self, data):
         return data.split("\t")
     def handleLine(self, line):
         try:
-            letter, rest = line.split( " ", 1 )
+            if len( line ) == 1:
+                letter, rest = line, None
+            else:
+                letter, rest = line.split( " ", 1 )
         except ValueError:
-            self.warnWith( "ignoring line {data} (no prefix)", line )
+            self.warnWith( "ignoring line %s (no prefix)", line )
             return
         try:
             f = {
                 'A': self.handleAdd,
                 'R': self.handleRemove,
                 'M': self.handleMessage,
+                'N': self.handleNew,
             }[letter]
         except KeyError:
-            self.warnWith( "ignoring line {data} (unknown prefix)", line )
+            self.warnWith( "ignoring line %s (unknown prefix)", line )
             return
         f( rest )
     def trySend(self):
@@ -189,12 +212,12 @@ class FlockDrawConnection:
         if incoming:
             self.bufferIn += incoming
             while True:
-                elements = self.bufferIn.split( b"\n", 1 )
+                elements = self.bufferIn.split( "\n", 1 )
                 if len( elements ) < 2:
                     self.bufferIn = elements[0]
                     break
                 line, self.bufferIn = elements
-                line = line.decode( DefaultEncoding )
+                line = line
                 self.handleLine( line )
         return incoming
     def isAbandoned(self):
@@ -229,17 +252,18 @@ class FlockDrawConnection:
         commands.append( "F" )
         self.broadcastCommands( commands )
 
-class FlockDrawImageServer( FlockDrawConnection ):
+class FlockDrawPNGServer( FlockDrawConnection ):
     def __init__(self,
                  whiteboard,
                  username,
-                 imagedata,
+                 pngfile = None,
                  server = DefaultServer,
                  port = DefaultPort):
-        self.imagedata = imagedata
+        if pngfile:
+            self.imagedata = png2img( open( pngfile, "rb" ).read() )
         FlockDrawConnection.__init__(self, whiteboard, username, server, port )
     def handleRequest(self, origin, args):
-        self.deliverCommands( origin, ["Bo " + self.imagedata.decode('iso-8859-2')] )
+        self.deliverCommands( origin, ["Bo " + self.imagedata ] )
     def obtainBitmap(self):
         self.tryObtainBitmap()
         self.obtainedBitmap = False
@@ -248,28 +272,13 @@ class FlockDrawImageServer( FlockDrawConnection ):
             if not self.bufferOut:
                 self.tryHandle()
     def handleBitmap(self, origin, data):
-        self.debugSaveBitmap( "last.bitmap", data )
+        self.debugSavePng( "last.png", data )
         self.obtainedBitmap = True
-        print( "Image saved as last.bitmap." )
+        print "Image saved as last.png."
 
 if __name__ == '__main__':
     import time
-    import base64
-    f = open( "smiley.bitmap", "rb" )
-    imagedata = list( f.read() )
-    f.close()
-#    imagedata[50] = 0xff
-    imagedata = bytes( imagedata )
-#    imagedata = bytes( [0x78, 0xda, 0xed]
-#                      + [ 0xc1, 0x31, 0x01 ] 
-#                      + [ 0, 0, 0, ] 
-#                      + [ 0xc2, 0xa0, 0xfe ]
-#                      + [ 0xa9, 0x67, 0x0a, 0x3f, 0xa0 ]
-#                      + [ i for i in range(256) ] * 10
-#    )
-    imagedata = base64.b64encode( imagedata )
-    imagedata += b"This is a suffix that might not be significant."
-    conn = FlockDrawImageServer( "testone", "observer", imagedata )
+    conn = FlockDrawPNGServer( "testone", "observer", pngfile = "es801x481_4.png" )
     try:
         while True:
             conn.trySend()
@@ -277,5 +286,5 @@ if __name__ == '__main__':
                 conn.tryHandle()
     except KeyboardInterrupt:
         conn.obtainBitmap()
-        print( "Leaving after keyboard interrupt." )
+        print "Leaving after keyboard interrupt."
     conn.shutdown()
