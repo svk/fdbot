@@ -210,26 +210,72 @@ class FlockDrawConnection:
         import socket
         self.flush()
         self.sock.shutdown( socket.SHUT_WR )
-        while True:
-            if not self.tryHandle():
-                break
         self.sock.close()
+    def debugPutPixel(self, x, y, colour):
+        commands = []
+        commands.append( "Bch brush" )
+        commands.append( "Ps 1" )
+        commands.append( "Cch %d" % colour )
+        commands.append( "Pd %d %d" % (x,y) )
+        commands.append( "Pu %d %d" % (x,y) )
+        commands.append( "F" )
+        self.broadcastCommands( commands )
+    def debugFloodFill(self, x, y, colour):
+        commands = []
+        commands.append( "Bch bucket" )
+        commands.append( "Cch %d" % colour )
+        commands.append( "Pd %d %d" % (x,y) )
+        commands.append( "Pu %d %d" % (x,y) )
+        commands.append( "F" )
+        self.broadcastCommands( commands )
+
+class FlockDrawImageServer( FlockDrawConnection ):
+    def __init__(self,
+                 whiteboard,
+                 username,
+                 imagedata,
+                 server = DefaultServer,
+                 port = DefaultPort):
+        self.imagedata = imagedata
+        FlockDrawConnection.__init__(self, whiteboard, username, server, port )
+    def handleRequest(self, origin, args):
+        self.deliverCommands( origin, ["Bo " + self.imagedata.decode('iso-8859-2')] )
+    def obtainBitmap(self):
+        self.tryObtainBitmap()
+        self.obtainedBitmap = False
+        while not self.obtainedBitmap:
+            self.trySend()
+            if not self.bufferOut:
+                self.tryHandle()
+    def handleBitmap(self, origin, data):
+        self.debugSaveBitmap( "last.bitmap", data )
+        self.obtainedBitmap = True
+        print( "Image saved as last.bitmap." )
 
 if __name__ == '__main__':
     import time
-    conn = FlockDrawConnection( "testone", "observer" )
-    interval = 60
-    t0 = time.time() - interval
+    import base64
+    f = open( "smiley.bitmap", "rb" )
+    imagedata = list( f.read() )
+    f.close()
+#    imagedata[50] = 0xff
+    imagedata = bytes( imagedata )
+#    imagedata = bytes( [0x78, 0xda, 0xed]
+#                      + [ 0xc1, 0x31, 0x01 ] 
+#                      + [ 0, 0, 0, ] 
+#                      + [ 0xc2, 0xa0, 0xfe ]
+#                      + [ 0xa9, 0x67, 0x0a, 0x3f, 0xa0 ]
+#                      + [ i for i in range(256) ] * 10
+#    )
+    imagedata = base64.b64encode( imagedata )
+    imagedata += b"This is a suffix that might not be significant."
+    conn = FlockDrawImageServer( "testone", "observer", imagedata )
     try:
-        while not conn.isAbandoned():
+        while True:
             conn.trySend()
             if not conn.bufferOut:
                 conn.tryHandle()
-            if time.time() - t0 > interval:
-                print("Requesting bitmap." )
-                conn.tryObtainBitmap()
-                t0 = time.time()
-        print( "Abandoned, leaving." )
     except KeyboardInterrupt:
+        conn.obtainBitmap()
         print( "Leaving after keyboard interrupt." )
     conn.shutdown()
